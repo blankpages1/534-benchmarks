@@ -346,11 +346,12 @@ int main(int argc, char *argv[]) {
     char filename_buffer[MAX_FILESIZE];
     if(snprintf(filename_buffer, 
 		MAX_FILESIZE,
-		"result-microbenchmark-mmap-%s-%s-%s-%s.csv",
+		"result-microbenchmark-mmap-%s-%s-%s-%s-%lds.csv",
 		smokewagon ? "smokewagon" : "inactive",
 		bystander ? "bystander" : "nobystander",
 		filebacked ? "filebacked" : "membacked",
-		cpupinning ? "pinning" : "nopinning") > MAX_FILESIZE)
+		cpupinning ? "pinning" : "nopinning",
+		duration) > MAX_FILESIZE)
     {
 	    printf("Failed to generate output filename");
 	    exit(-1);
