@@ -141,7 +141,8 @@ function run_mmap_benchmark
     enable_bys=("x" "-b")
     enable_pin=("x" "-p")
 
-    base_param="-t $cores -d 4"
+    duration="10"
+    base_param="-t $cores -d $duration"
 
     for p1 in ${enable_fbp[@]}; do
     for p2 in ${enable_bys[@]}; do
