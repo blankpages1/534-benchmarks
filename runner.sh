@@ -195,6 +195,9 @@ function run_apache_benchmark
             sleep 0.5
         done
     done
+
+    echo "cores,req_per_sec" > apache_results.csv
+    cat apache_results.txt | grep "Requests/" | awk '{print i++ "," $2}' >> apache_results.csv
 )}
 
 install_tests
