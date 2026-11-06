@@ -108,7 +108,7 @@ function install_tests
     "x86_64")
         tar -xzf "go1.27.3.linux-amd64.tar.gz"
         ;;
-    "arm64")
+    "aarch64")
         tar -xvf "go1.27.3.linux-arm64.tar.gz"
         ;;
     "riscv64")
