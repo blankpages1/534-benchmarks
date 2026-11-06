@@ -14,7 +14,7 @@ mkdir -p "$output_folder"
 output_folder="$(realpath "$output_folder")/"
 
 # gather system information
-cores="$(grep /proc/cpuinfo -e "vendor_id" | wc -l)"
+cores="$(cat /proc/cpuinfo | grep -e processor | wc -l)"
 lscpu &> "$output_folder/lscpu_result.txt"
 gcc -v &> "$output_folder/gcc_version.txt"
 
