@@ -245,7 +245,7 @@ function run_gcc_benchmark
     gcc "$repo_directory/microbenchmark-stress.c" -lpthread -o stress
 
     itterations=2
-    threads="$(expr $cores / 8) $(expr $cores / 4) $(expr $cores / 2)"
+    threads="$(expr $cores / 8) $(expr $cores / 4) $(expr $cores / 2) $(expr $cores)"
     
     cp -r "$cache_folder/ffmpeg" .
     cd ffmpeg
