@@ -1,4 +1,5 @@
 #!/bin/bash
+useperf="$1"
 set -e pipefail
 
 repo_directory="$(dirname "$(realpath "$0")")"
@@ -15,8 +16,11 @@ output_folder="$(realpath "$output_folder")/"
 
 # gather system information
 cores="$(cat /proc/cpuinfo | grep -e processor | wc -l)"
+arch="$(uname -m)"
+
 lscpu &> "$output_folder/lscpu_result.txt"
 gcc -v &> "$output_folder/gcc_version.txt"
+uname -a &> "$output_folder/kernel_version.txt"
 
 function download_external
 {(
@@ -63,7 +67,7 @@ function setup_dir
 
 function install_tests
 {(
-    download_external "httpd-2.4.70.tar.gz" "https://dlcdn.apache.org/httpd/httpd-2.4.70.tar.gz" "e0cc26ab60a024db2b4a9b219ce6e1538fe2d3138ece2156d2834c63ae21913d"
+    download_external "httpd-2.4.70.tar.gz" "https://archive.apache.org/dist/httpd/httpd-2.4.70.tar.gz" "e0cc26ab60a024db2b4a9b219ce6e1538fe2d3138ece2156d2834c63ae21913d"
     download_external "apr-1.7.6.tar.gz" "https://dlcdn.apache.org//apr/apr-1.7.6.tar.gz" "6a10e7f7430510600af25fabf466e1df61aaae910bf1dc5d10c44a4433ccc81d"
     download_external "apr-util-1.6.6.tar.gz" "https://dlcdn.apache.org//apr/apr-util-1.6.6.tar.gz" "acd5f38440eda830e40c4fe35c2a6b8119493cfdba9c9d73d985c317beb4e4f8"
     download_git "https://github.com/PCRE2Project/pcre2.git" "pcre2-10.48" "pcre2"
@@ -73,7 +77,6 @@ function install_tests
     download_external "go1.27.3.linux-arm64.tar.gz" "https://go.dev/dl/go1.27.3.linux-arm64.tar.gz" "a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49"
     download_external "go1.27.3.linux-riscv64.tar.gz" "https://go.dev/dl/go1.27.3.linux-riscv64.tar.gz" "41fe171fb7fcf5574cba7d874c2732dca9161ce2dba631d754371951df9ea310"
     download_git "https://github.com/rakyll/hey.git" "v0.1.5" "hey"
-    download_git "https://github.com/dex4er/fakechroot.git" "master/2.18" "fakechroot"
 
     if [[ ! -e "$repo_directory/cache/compiled/bin/httpd" ]]; then
     (
@@ -104,7 +107,7 @@ function install_tests
     
     # build hey
     echo "Unpack go for $(uname -m)"
-    case "$(uname -m)" in
+    case "$arch" in
     "x86_64")
         tar -xzf "go1.27.3.linux-amd64.tar.gz"
         ;;
@@ -120,15 +123,21 @@ function install_tests
         ;;    
     esac
     CGO_ENABLED=0 go/bin/go build -C ./hey -a
-    
-    cd fakechroot
-    ./autogen.sh
-    ./configure --prefix="$cache_folder/compiled" CFLAGS="-D_STAT_VER=0 -O2"
-    make -j $cores
-    make install -j "$cores"
-    cd -
     )
     fi
+)}
+
+function tlb_interrupts
+{(
+    target_file="$1"
+
+    case "$arch" in
+    "x86_64")
+        cat /proc/interrupts | grep TLB | sed -e 's/[^0-9]/ /g' -e 's/^ *//g' -e 's/ *$//g' | tr -s ' ' >> "$target_file"
+        ;;
+    *)
+        ;;
+    esac
 )}
 
 function run_mmap_benchmark
@@ -138,22 +147,39 @@ function run_mmap_benchmark
     gcc "$repo_directory/microbenchmark-mmap.c" -lpthread -o mmap
 
     enable_fbp=("x" "-f")
-    enable_bys=("x" "-b")
+    #enable_bys=("x" "-b")
     enable_pin=("x" "-p")
 
     duration="10"
-    base_param="-t $cores -d $duration"
+    base_param="-d $duration"
 
+    # record data for core and parameter sweep
     for p1 in ${enable_fbp[@]}; do
-    for p2 in ${enable_bys[@]}; do
+    #for p2 in ${enable_bys[@]}; do
     for p3 in ${enable_pin[@]}; do
-    pstring="$p1 $p2 $p3"
+    pstring="$p1 $p3"
     result="${pstring//x}"
     echo $result
-    ./mmap $base_param $pstring
+    
+    for cen in $(seq 1 $cores); do
+        tlb_interrupts "${p1}${p3}_shootdowns.txt"
+        ./mmap -t $cen -m $cen $base_param $pstring
+        tlb_interrupts "${p1}${p3}_shootdowns.txt"
     done
+
     done
+    #done
     done
+
+    # record perf for a core sweep on the "best" configurations
+    if [[ "$useperf" == "true" ]]; then
+    mkdir -p perf
+    cd perf
+    for cen in $(seq 1 $cores); do
+        sudo perf record -ag -F 2000 -o"perf_$cen.data" ./mmap -t $cen -m $cen $base_param "-f"
+    done
+    cd -
+    fi
 
     rm mmap
 )}
@@ -183,8 +209,16 @@ function run_apache_benchmark
             sleep 0.5
         done
 
-        (taskset -c "$max_apache_cores-$(expr "$cores" - 1)" fakechroot chroot "$cache_folder/hey" "./hey" -t "$timeout" -z "${ab_time}s" -c "$ab_concurrency" "http://localhost:8080/") | tee -a apache_results.txt
-        #taskset -c "$max_apache_cores-$(expr "$cores" - 1)" ab -c "$ab_concurrency" -s "$timeout" -t "$ab_time" -n 1000000 http://localhost:8080/ | tee -a apache_results.txt
+        tlb_interrupts "shootdowns.txt"
+        (taskset -c "$max_apache_cores-$(expr "$cores" - 1)" "$cache_folder/hey/hey" -t "$timeout" -z "${ab_time}s" -c "$ab_concurrency" "http://localhost:8080/") | tee -a apache_results.txt
+        tlb_interrupts "shootdowns.txt"
+
+        if [[ "$useperf" == "true" ]]; then
+        mkdir -p perf
+        cd perf
+        (sudo perf record -ag -F 2000 -o"perf_$i.data" -- taskset -c "$max_apache_cores-$(expr "$cores" - 1)" "$cache_folder/hey/hey" -t "$timeout" -z "${ab_time}s" -c "$ab_concurrency" "http://localhost:8080/") | tee -a apache_results.txt
+        cd -
+        fi
 
         # Shutdown httpd
         httpd -f "$repo_directory/apache/httpd.conf" -k graceful-stop

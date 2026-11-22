@@ -358,14 +358,14 @@ int main(int argc, char *argv[]) {
     }	    
     		
     printf("Opening %s\n", filename_buffer);
-    FILE *fptr = fopen(filename_buffer, "w");
+    FILE *fptr = fopen(filename_buffer, "a");
     if(fptr == NULL) {
         perror("file opening error!");
         return EXIT_FAILURE;
     }
 
-    fprintf(fptr, "threads,loops\n");
-    for (long t=0; t<threads; t++) {
+    printf("Writing threads,loops\n");
+    for (long t=min_threads-1; t<threads; t++) {
         fprintf(fptr, "%ld, %ld\n", t+1, results[t]);
     }
     fclose(fptr);
