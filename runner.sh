@@ -111,7 +111,7 @@ function install_tests
     "x86_64")
         tar -xzf "go1.27.3.linux-amd64.tar.gz"
         ;;
-    "arm64")
+    "aarch64")
         tar -xvf "go1.27.3.linux-arm64.tar.gz"
         ;;
     "riscv64")
@@ -229,6 +229,9 @@ function run_apache_benchmark
             sleep 0.5
         done
     done
+
+    echo "cores,req_per_sec" > apache_results.csv
+    cat apache_results.txt | grep "Requests/" | awk '{print i++ "," $2}' >> apache_results.csv
 )}
 
 install_tests
