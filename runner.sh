@@ -17,6 +17,7 @@ output_folder="$(realpath "$output_folder")/"
 # gather system information
 cores="$(cat /proc/cpuinfo | grep -e processor | wc -l)"
 arch="$(uname -m)"
+user="$(whoami)"
 
 lscpu &> "$output_folder/lscpu_result.txt"
 gcc -v &> "$output_folder/gcc_version.txt"
@@ -218,9 +219,7 @@ function run_apache_benchmark
         if [[ "$useperf" == "true" ]]; then
         mkdir -p perf
         cd perf
-        sudo perf record -ag -F 2000 -o"perf_$i.data" &
-        (taskset -c "$max_apache_cores-$(expr "$cores" - 1)" "$cache_folder/hey/hey" -t "$timeout" -z "${ab_time}s" -c "$ab_concurrency" "http://localhost:8080/") | tee -a apache_results.txt
-        kill &!
+        sudo perf record -ag -F 2000 -o"perf_$i.data" sudo -u "$user" bash -c "(taskset -c "$max_apache_cores-$(expr "$cores" - 1)" "$cache_folder/hey/hey" -t "$timeout" -z "${ab_time}s" -c "$ab_concurrency" "http://localhost:8080/") | tee -a apache_results.txt"
         cd -
         fi
 
