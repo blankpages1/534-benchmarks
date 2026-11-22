@@ -78,6 +78,8 @@ function install_tests
     download_external "go1.27.3.linux-riscv64.tar.gz" "https://go.dev/dl/go1.27.3.linux-riscv64.tar.gz" "41fe171fb7fcf5574cba7d874c2732dca9161ce2dba631d754371951df9ea310"
     download_git "https://github.com/rakyll/hey.git" "v0.1.5" "hey"
 
+    download_git "https://git.ffmpeg.org/ffmpeg.git" "release/9.1" "ffmpeg"
+
     if [[ ! -e "$repo_directory/cache/compiled/bin/httpd" ]]; then
     (
     cd $cache_folder
@@ -176,7 +178,7 @@ function run_mmap_benchmark
     mkdir -p perf
     cd perf
     for cen in $(seq 1 $cores); do
-        sudo perf record -ag -F 2000 -o"perf_$cen.data" ./mmap -t $cen -m $cen $base_param "-f"
+        sudo perf record -ag -F 2000 -o"perf_$cen.data" ../mmap -t $cen -m $cen $base_param "-f"
     done
     cd -
     fi
@@ -234,6 +236,55 @@ function run_apache_benchmark
     cat apache_results.txt | grep "Requests/" | awk '{print i++ "," $2}' >> apache_results.csv
 )}
 
+function run_gcc_benchmark
+{(
+    setup_dir "gccbench"
+
+    gcc "$repo_directory/microbenchmark-stress.c" -lpthread -o stress
+
+    itterations=5
+    threads="$(seq $(expr $cores / 4) $(expr $cores / 2))"
+    
+    cp -r "$cache_folder/ffmpeg" .
+    cd ffmpeg
+    git clean -fxd
+    ./configure --disable-x86asm
+
+    for threadct in $threads; do
+        # baseline
+        for i in $(seq 1 $itterations); do
+            make clean
+            echo "Building FFMPEG $i/$itterations"
+            (export TIMEFORMAT='%R'; time make -j "$threadct" &>/dev/null) 2>> "../baseline_${threadct}.csv"
+        done
+
+        # spin
+        for i in $(seq 1 $itterations); do
+            make clean
+            echo "Building FFMPEG $i/$itterations"
+            ../stress -p -t $threadct &
+            (export TIMEFORMAT='%R'; time make -j "$threadct" &>/dev/null) 2>> "../spin_${threadct}.csv"
+            kill $(jobs -p)
+        done
+
+        # TLB thrashing
+        for i in $(seq 1 $itterations); do
+            make clean
+            echo "Building FFMPEG $i/$itterations"
+            ../stress -t $threadct &
+            tlb_interrupts "../shootdowns_${threadct}.txt"
+            (export TIMEFORMAT='%R'; time make -j "$threadct" &>/dev/null) 2>> "../stress_${threadct}.csv"
+            kill $(jobs -p)
+            tlb_interrupts "../shootdowns_${threadct}.txt"
+        done
+    done
+
+    cd ..
+    rm -rf ffmpeg
+)}
+
 install_tests
+
 run_mmap_benchmark
 run_apache_benchmark
+run_gcc_benchmark

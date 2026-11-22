@@ -1,0 +1,264 @@
+/* microbenchmark-fileback.c - each thread mmap-reads-munmaps a file */
+
+#define _GNU_SOURCE
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>      // for open()
+#include <pthread.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <time.h>
+#include <unistd.h>     // getopt guide: https://azrael.digipen.edu/~mmead/www/mg/getopt/index.html
+#include <ctype.h>      // for isdigit()
+#include <sched.h>
+#include <sys/utsname.h> // for uname syscall
+#include <stdint.h> // for uintptr_t
+#include <limits.h> // for PATH_MAX
+
+#define ONE_GB_SIZE (1ULL << 30)
+#define HUGEPAGE_SIZE 2097152
+#define PAGE_SIZE   4096
+#define MAX_THREADS 10000
+#define MAP_PRIVATE_TLB 0x200000
+
+struct __attribute__ ((aligned (64))) per_thread_info {
+    int tid;
+    pthread_t thread;
+    pthread_attr_t attr;
+    cpu_set_t cpuset;
+    unsigned long counter;
+    int return_value;
+    char* my_page;
+    char* bystander_page;
+    int fd;
+    bool spin;
+};
+
+long threads = 8;
+
+int mmap_flags = MAP_SHARED|MAP_FIXED_NOREPLACE;
+bool smokewagon = false; // smokewagon == false means don't use smokewagon, smokewagon == true means use smokewagon
+bool filebacked = false;
+bool bystander = false;
+bool spin = false;
+
+void* test_smokewagon(void* info_ptr) {
+    struct per_thread_info* my_info = info_ptr;
+    int tid = my_info->tid;
+
+    if(my_info->spin){
+        while(1) { 0; };
+    }
+
+    do {
+        // mmap the thread's page in the file
+        char* ptr = mmap(my_info->my_page, PAGE_SIZE, filebacked ? PROT_READ : PROT_READ|PROT_WRITE, mmap_flags, my_info->fd, 0);
+        if (ptr == NULL) {
+            printf("mmap() for tid: %d failed, ptr == NULL\n", tid);
+            return info_ptr;
+        } else if (ptr == MAP_FAILED) {
+            printf("mmap() for tid: %d failed, ptr == MAP_FAILED\n", tid);
+            return info_ptr;
+        } else if (ptr != my_info->my_page) {
+            printf("mmap() for tid: %d problem, ptr != my_info->my_page\n", tid);
+            return info_ptr;
+        }
+
+        // read file or write anonymous memory
+        if (filebacked) {
+            if (ptr[0] != 'y') {
+                printf("uhoh, tid: %d misplaced its page somehow\n", tid);
+            }
+        } else {
+            ptr[0] = 'y';
+        }
+
+        // munmap page
+        munmap(ptr, PAGE_SIZE);
+    } while (true);
+    return info_ptr;
+}
+
+int main(int argc, char *argv[]) {
+    struct per_thread_info thread_infos[MAX_THREADS];
+
+    // check opts
+    int opt;
+    while ((opt = getopt(argc, argv, "hbfspt:")) != -1) {
+        switch(opt) {
+            case 't':
+                for (char *p = optarg; *p; p++) {
+                    if (!isdigit(*p)) {
+                        printf("Error: -t requires a positive integer\n");
+                        return EXIT_FAILURE;
+                    }
+                }
+                int opt_threads = atoi(optarg);
+                if (opt_threads <= MAX_THREADS && opt_threads > 0) {
+                    threads = opt_threads;
+                } else {
+                    printf("Error: -t is %d, but should be between 1 and %d, defaulting to 4\n", opt_threads, MAX_THREADS);
+                }
+                break;
+            case 's':
+                smokewagon = true;
+                break;
+            case 'f':
+                filebacked = true;
+                break;
+            case 'b':
+                bystander = true;
+                break;
+            case 'p':
+                spin = true;
+                break;
+	        case 'h':
+		        printf("-t {max_thread_count}\n");
+		        printf("-s : enable smokewagon support\n");
+		        printf("-f : enable filebacked pages\n");
+		        printf("-b : enable bystander page\n");
+		        printf("-p : enable idle spin\n");
+		        exit(0);
+		        break;
+        }
+    }
+
+    // Print execution arguments
+    if (smokewagon) {
+        mmap_flags |= MAP_PRIVATE_TLB;
+        printf("smokewagon: ON\n");
+    } else {
+        printf("smokewagon: OFF\n");
+    }
+    if (filebacked) {
+        printf("filebacked: ON\n");
+    } else {
+        mmap_flags |= MAP_ANONYMOUS;
+        printf("filebacked: OFF\n");
+    }
+    if (bystander) {
+	    printf("bystander:  ON\n\n");
+    } else {
+	    printf("bystander:  OFF\n");
+    }
+    printf("Threads: %ld\n", threads);
+    printf("Spin: %s\n", spin ? "true" : "false");
+    printf("\n");
+
+    // each thread gets its own 1 GB virtual region to avoid page table lock contention
+    // get this by mapping threads+1 GB and then picking aligned pointers from it
+    // we have to faff about because there's no guarantee that big_mmap_ptr is GB-aligned
+    char* big_mmap_ptr = mmap(NULL, ONE_GB_SIZE*(threads+1), PROT_NONE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    if (big_mmap_ptr == MAP_FAILED || big_mmap_ptr == NULL) {
+        printf("big mmap failed\n");
+        return -1;
+    }
+    // GB-aligned          big_mmap_ptr                              aligned_ptr
+    // |-----unallocated---|----------offset_to_allocated------------|-------big-allocation-goes-on...
+    size_t offset_to_unallocated = (uintptr_t) big_mmap_ptr % ONE_GB_SIZE;
+    size_t offset_to_allocated = (ONE_GB_SIZE - offset_to_unallocated) % ONE_GB_SIZE;
+    char* aligned_ptr = big_mmap_ptr + offset_to_allocated;
+
+    // per-thread preparation
+    for (int i=0; i<threads; i++) {
+        thread_infos[i].tid = i; // assign each thread an id
+
+        // carve off our chunk of the big allocation
+        thread_infos[i].my_page = aligned_ptr;
+        aligned_ptr += ONE_GB_SIZE;
+
+        // punch a hole in our allocation that we'll map the file into later
+        munmap(thread_infos[i].my_page, PAGE_SIZE);
+
+        if (bystander) {
+            // each thread gets a bystander page to prevent freed_tables full-mm shootdown
+            thread_infos[i].bystander_page = thread_infos[i].my_page + PAGE_SIZE;
+            mprotect(thread_infos[i].bystander_page, PAGE_SIZE, PROT_READ|PROT_WRITE);
+            thread_infos[i].bystander_page[0] = 'x';
+        }
+
+        // could unmap the rest of our allocation, but why bother? faster vma traversal maybe?
+        if (filebacked)  {
+            // open a file for each thread
+            char filename[200];
+            snprintf(filename, sizeof(filename), "microbenchmark-filebacked-temp-%05d", i);
+            thread_infos[i].fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0600);
+            if (thread_infos[i].fd == -1) {
+                printf("file opening error!\n");
+                return -1;
+            }
+
+            // extend file, 4 KiB per thread
+            if (ftruncate(thread_infos[i].fd, PAGE_SIZE)) {
+                printf("file truncation error!\n");
+                close(thread_infos[i].fd);
+                return -1;
+            }
+
+            // mmap file and write for warmup
+            char* ptr = mmap(thread_infos[i].my_page, PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED_NOREPLACE, thread_infos[i].fd, 0);
+            if (ptr == NULL) {
+                printf("mmap() for tid: %d failed, ptr == NULL\n", i);
+                return -1;
+            } else if (ptr == MAP_FAILED) {
+                printf("mmap() for tid: %d failed, ptr == MAP_FAILED\n", i);
+                return -1;
+            } else if (ptr != thread_infos[i].my_page) {
+                printf("mmap() for tid: %d problem, ptr != thread_infos[i].my_page\n", i);
+                return -1;
+            }
+            ptr[0] = 'y';
+            munmap(ptr, PAGE_SIZE);
+        } else {
+            thread_infos[i].fd = -1;
+        }
+
+        thread_infos[i].spin = spin;
+
+        // set cpu affinities: https://man7.org/linux/man-pages/man3/pthread_setaffinity_np.3.html
+        CPU_ZERO(&thread_infos[i].cpuset);
+        CPU_SET(i, &thread_infos[i].cpuset);
+    }
+
+    // main microbenchmarking loops
+    for (long t=threads-1; t<threads; t++) {
+        // create and run threads
+        for (long i=1; i<=t; i++) {
+            thread_infos[i].return_value = pthread_create(&thread_infos[i].thread, &thread_infos[i].attr, test_smokewagon, &thread_infos[i]);
+            if (thread_infos[i].return_value) 
+	    {
+		printf("ERROR: return code for thread %ld from pthread_create() is %d\n", i, thread_infos[i].return_value);
+	   	exit(-1); //TODO: write cleanup code to deal with any successfully created threads
+	    }
+	}
+
+        test_smokewagon(&thread_infos[0]);
+
+        // join created threads
+        for (long i=1; i<=t ;i++) {
+            pthread_join(thread_infos[i].thread, NULL);
+            //if (threads[i].return_value) printf("ERROR: return code %d from thread %ld\n", threads[i].return_value, i);
+        }
+    }
+
+    munmap(big_mmap_ptr, ONE_GB_SIZE*(threads+1));
+    // cleanup loop
+    for (int i=0; i<threads; i++) {
+        close(thread_infos[i].fd);
+        char filename[200];
+        snprintf(filename, sizeof(filename), "microbenchmark-filebacked-temp-%05d", i);
+        remove(filename);
+    }
+    printf("testing files deleted\n\n");
+
+    /* don't destroy pthread_attr for t=0, since we didn't initialize it */
+    for (long t=1; t<threads; t++) {
+        pthread_attr_destroy(&thread_infos[t].attr);
+    }
+    printf("pthread attributes destroyed\n");
+
+    return EXIT_SUCCESS;
+}
