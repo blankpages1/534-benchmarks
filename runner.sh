@@ -289,7 +289,7 @@ function run_sem_benchmark
     setup_dir sem
     gcc "$repo_directory/microbenchmark-sem.c" -lpthread -o sem
     for cen in $(seq 1 $cores); do
-        ./sem -t $cen -d 5 | tee -a results.csv
+        ./sem -t $cen -d 10 | tee -a results.csv
     done    
     rm sem
 )}
