@@ -284,8 +284,19 @@ function run_gcc_benchmark
     rm -rf ffmpeg
 )}
 
+function run_sem_benchmark
+{(
+    setup_dir sem
+    gcc "$repo_directory/microbenchmark-sem.c" -lpthread -o sem
+    for cen in $(seq 1 $cores); do
+        ./sem -t $cen -d 5 | tee -a results.csv
+    done    
+    rm sem
+)}
+
 install_tests
 
-run_mmap_benchmark
-run_apache_benchmark
-run_gcc_benchmark
+#run_mmap_benchmark
+#run_apache_benchmark
+#run_gcc_benchmark
+run_sem_benchmark
