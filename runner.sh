@@ -295,7 +295,7 @@ function run_sem_benchmark
     for lt in $loop_targets; do
     echo Semaphore test with $lt idle loops
     for cen in $(seq 1 $cores); do
-        ./sem -t $cen -d $duration -b $lt | tee -a results.csv
+        ./sem -t $cen -d $duration -b $lt | tee -a "results_$lt.csv"
     done
     done
     rm sem
