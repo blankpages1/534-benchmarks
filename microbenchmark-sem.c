@@ -46,6 +46,10 @@ static void* procedure(thread_param* param)
         }
         else
         {
+            if(clock() > param->end){
+                pthread_mutex_unlock(&tdata.lock);
+                break;
+            }
             tdata.critical_count += 1;
             for(unsigned int i = 0; i < param->idle_loops; i++) tdata.scratchpad ++;
             pthread_mutex_unlock(&tdata.lock);
@@ -89,7 +93,7 @@ int main(int argc, char *argv[])
     pthread_mutex_init(&tdata.lock, 0);
     pthread_t threadlist[threads];
     tparam.end = endpoint;
-    tparam.idle_loops = 100;
+    tparam.idle_loops = 2000;
 
     tdata.critical_count = 0;
     tdata.scratchpad = 0;
