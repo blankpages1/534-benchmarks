@@ -89,7 +89,7 @@ int main(int argc, char *argv[])
     pthread_mutex_init(&tdata.lock, 0);
     pthread_t threadlist[threads];
     tparam.end = endpoint;
-    tparam.idle_loops = 10000;
+    tparam.idle_loops = 100;
 
     tdata.critical_count = 0;
     tdata.scratchpad = 0;
