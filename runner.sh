@@ -288,9 +288,16 @@ function run_sem_benchmark
 {(
     setup_dir sem
     gcc "$repo_directory/microbenchmark-sem.c" -lpthread -o sem
+    
+    loop_targets="100 1000 5000"
+    duration=10    
+
+    for lt in $loop_targets; do
+    echo Semaphore test with $lt idle loops
     for cen in $(seq 1 $cores); do
-        ./sem -t $cen -d 10 | tee -a results.csv
-    done    
+        ./sem -t $cen -d $duration -b $lt | tee -a results.csv
+    done
+    done
     rm sem
 )}
 

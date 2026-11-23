@@ -28,6 +28,7 @@ void display_help(int exitcode, const char* errormsg)
     printf("-h : print help\n");
     printf("-t i{threads} : test thread count\n");
     printf("-d i{duration} : duration in seconds\n");
+    printf("-b i{busyloops} : number of busyloops to do");
 
     exit(exitcode);
 }
@@ -63,9 +64,10 @@ int main(int argc, char *argv[])
     int threads = 0;
     int duration = 10;
     clock_t endpoint;
+    int busyloops = 1;
 
     int opt;
-    while((opt = getopt(argc, argv, "ht:d:")) != -1)
+    while((opt = getopt(argc, argv, "ht:d:b:")) != -1)
     {
         switch(opt)
         {
@@ -80,6 +82,10 @@ int main(int argc, char *argv[])
             duration = atoi(optarg);
             if(duration <= 0) display_help(-1, "Duration must be a positive integer");
             break;
+        case 'b':
+            busyloops = atoi(optarg);
+            if(busyloops <= 0) display_help(-1, "Busyloops must be a positive integer");
+            break;
         default:
             display_help(-1, "Arg list not valid");
             break;
@@ -87,13 +93,13 @@ int main(int argc, char *argv[])
     }
     if(threads == 0) display_help(-1, "-t is a required argument");
     
-    //printf("Executing semaphore contention test for %d seconds\n", duration);
+    fprintf(stderr, "Executing semaphore contention test for %d seconds, busyloops: %d\n", duration, busyloops);
     endpoint = clock() + duration * CLOCKS_PER_SEC;
 
     pthread_mutex_init(&tdata.lock, 0);
     pthread_t threadlist[threads];
     tparam.end = endpoint;
-    tparam.idle_loops = 2000;
+    tparam.idle_loops = busyloops;
 
     tdata.critical_count = 0;
     tdata.scratchpad = 0;
